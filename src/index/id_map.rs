@@ -67,7 +67,7 @@ use std::mem;
 use std::os::raw::c_int;
 use std::ptr;
 
-use super::IndexImpl;
+use super::{CentroidSearchResult, IndexImpl};
 
 /// Wrapper for implementing arbitrary ID mapping to an index.
 ///
@@ -312,6 +312,10 @@ impl<I> Index for IdMap<I> {
         unsafe {
             faiss_Index_set_verbose(self.inner_ptr(), c_int::from(value));
         }
+    }
+
+    fn search_centroids<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<CentroidSearchResult> {
+        unimplemented!()
     }
 }
 

@@ -45,15 +45,15 @@ macro_rules! impl_native_index {
             fn is_trained(&self) -> bool {
                 unsafe { faiss_Index_is_trained(self.inner_ptr()) != 0 }
             }
-
+        
             fn ntotal(&self) -> u64 {
                 unsafe { faiss_Index_ntotal(self.inner_ptr()) as u64 }
             }
-
+        
             fn d(&self) -> u32 {
                 unsafe { faiss_Index_d(self.inner_ptr()) as u32 }
             }
-
+        
             fn metric_type(&self) -> crate::metric::MetricType {
                 unsafe {
                     crate::metric::MetricType::from_code(
@@ -62,7 +62,7 @@ macro_rules! impl_native_index {
                     .unwrap()
                 }
             }
-
+        
             fn add(&mut self, x: &[f32]) -> Result<()> {
                 unsafe {
                     let n = x.len() / self.d() as usize;
@@ -70,7 +70,7 @@ macro_rules! impl_native_index {
                     Ok(())
                 }
             }
-
+        
             fn add_with_ids(&mut self, x: &[f32], xids: &[crate::index::Idx]) -> Result<()> {
                 unsafe {
                     let n = x.len() / self.d() as usize;
@@ -143,14 +143,14 @@ macro_rules! impl_native_index {
                     Ok(crate::index::RangeSearchResult { inner: p_res })
                 }
             }
-
+        
             fn reset(&mut self) -> Result<()> {
                 unsafe {
                     faiss_try(faiss_Index_reset(self.inner_ptr()))?;
                     Ok(())
                 }
             }
-
+        
             fn remove_ids(&mut self, sel: &IdSelector) -> Result<usize> {
                 unsafe {
                     let mut n_removed = 0;
@@ -162,11 +162,52 @@ macro_rules! impl_native_index {
                     Ok(n_removed)
                 }
             }
-
+        
+            fn search_centroids<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<crate::index::CentroidSearchResult> {
+                assert!(k == 1, "k must be 1, other values are unimplemented");
+                assert!(self.metric_type() == crate::MetricType::InnerProduct, "Only inner product is supported at the moment");
+        
+                let nq = query.as_ref().len() / self.d() as usize;
+                // For now, let it overextend. Technically this should be
+                // equal to M when the index is quantized
+                let mut bytes = vec![0 as u8; self.d() as usize * nq * size_of::<usize>() / size_of::<u8>()];
+                unsafe {
+                    faiss_try(faiss_Index_sa_encode(
+                        self.inner_ptr(), 
+                        nq as i64, 
+                        query.as_ref().as_ptr(), 
+                        bytes.as_mut_ptr()))?;
+                }
+        
+                let mut centroid_coords = vec![0 as f32; self.d() as usize * nq];
+        
+                // once encoded, decode the codes in bytes to get back the k closest centroids
+                unsafe {
+                    faiss_try(faiss_Index_sa_decode(
+                        self.inner_ptr(),
+                        nq as i64, 
+                        bytes.as_ptr(), 
+                        centroid_coords.as_mut_ptr()))?;
+                }
+        
+                // calculate inner product
+                let mut distances = vec![0_f32; nq];
+                for i in 0..nq {
+                    unsafe {
+                        faiss_fvec_inner_products_ny(distances.as_mut_ptr().add(i), 
+                            query.as_ref().as_ptr().add(self.d() as usize * i),
+                            centroid_coords.as_ptr().add(self.d() as usize * i * k),
+                            self.d() as usize, 
+                            k);
+                    }
+                }
+                Ok(crate::index::CentroidSearchResult { distances })
+            }
+        
             fn verbose(&self) -> bool {
                 unsafe { faiss_Index_verbose(self.inner_ptr()) != 0 }
             }
-
+        
             fn set_verbose(&mut self, value: bool) {
                 unsafe {
                     faiss_Index_set_verbose(self.inner_ptr(), std::os::raw::c_int::from(value));

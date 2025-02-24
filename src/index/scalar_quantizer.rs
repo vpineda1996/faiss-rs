@@ -392,6 +392,10 @@ impl<Q> Index for IVFScalarQuantizerIndexImpl<Q> {
             faiss_Index_set_verbose(self.inner, std::os::raw::c_int::from(value));
         }
     }
+
+    fn search_centroids<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<CentroidSearchResult> {
+        unimplemented!()
+    }
 }
 
 impl<Q> TryClone for IVFScalarQuantizerIndexImpl<Q> {

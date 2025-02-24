@@ -216,6 +216,10 @@ impl<BI> Index for RefineFlatIndexImpl<BI> {
             faiss_Index_set_verbose(self.inner, std::os::raw::c_int::from(value));
         }
     }
+    
+    fn search_centroids<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<CentroidSearchResult> {
+        unimplemented!()
+    }
 }
 
 impl<I> TryClone for RefineFlatIndexImpl<I> {

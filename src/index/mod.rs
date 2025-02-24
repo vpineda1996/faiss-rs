@@ -11,7 +11,7 @@
 //! [`index_factory`]: fn.index_factory.html
 
 use crate::error::{Error, Result};
-use crate::faiss_try;
+use crate::{faiss_try, index};
 use crate::metric::MetricType;
 use crate::selector::IdSelector;
 use std::ffi::CString;
@@ -185,6 +185,8 @@ pub trait Index {
 
     /// Set Index verbosity level
     fn set_verbose(&mut self, value: bool);
+
+    fn search_centroids<T: AsRef<[f32]>>(&mut self, q: T, k: usize) -> Result<CentroidSearchResult>;
 }
 
 impl<I> Index for Box<I>
@@ -245,6 +247,10 @@ where
 
     fn set_verbose(&mut self, value: bool) {
         (**self).set_verbose(value)
+    }
+
+    fn search_centroids<T: AsRef<[f32]>>(&mut self, q: T, k: usize) -> Result<CentroidSearchResult> {
+        (**self).search_centroids(q, k)
     }
 }
 
@@ -371,6 +377,13 @@ pub struct SearchResult {
     pub distances: Vec<f32>,
     pub labels: Vec<Idx>,
 }
+
+/// The outcome of an index centroid search operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CentroidSearchResult {
+    pub distances: Vec<f32>
+}
+
 
 /// The outcome of an index range search operation.
 #[derive(Debug, Clone, PartialEq)]
@@ -534,7 +547,181 @@ impl<NI: NativeIndex> UpcastIndex for NI {
     }
 }
 
-impl_native_index!(IndexImpl);
+// impl_native_index!(IndexImpl);
+
+impl crate::index::Index for IndexImpl {
+    fn is_trained(&self) -> bool {
+        unsafe { faiss_Index_is_trained(self.inner_ptr()) != 0 }
+    }
+
+    fn ntotal(&self) -> u64 {
+        unsafe { faiss_Index_ntotal(self.inner_ptr()) as u64 }
+    }
+
+    fn d(&self) -> u32 {
+        unsafe { faiss_Index_d(self.inner_ptr()) as u32 }
+    }
+
+    fn metric_type(&self) -> crate::metric::MetricType {
+        unsafe {
+            crate::metric::MetricType::from_code(
+                faiss_Index_metric_type(self.inner_ptr()) as u32
+            )
+            .unwrap()
+        }
+    }
+
+    fn add(&mut self, x: &[f32]) -> Result<()> {
+        unsafe {
+            let n = x.len() / self.d() as usize;
+            faiss_try(faiss_Index_add(self.inner_ptr(), n as i64, x.as_ptr()))?;
+            Ok(())
+        }
+    }
+
+    fn add_with_ids(&mut self, x: &[f32], xids: &[crate::index::Idx]) -> Result<()> {
+        unsafe {
+            let n = x.len() / self.d() as usize;
+            faiss_try(faiss_Index_add_with_ids(
+                self.inner_ptr(),
+                n as i64,
+                x.as_ptr(),
+                xids.as_ptr() as *const _,
+            ))?;
+            Ok(())
+        }
+    }
+    fn train(&mut self, x: &[f32]) -> Result<()> {
+        unsafe {
+            let n = x.len() / self.d() as usize;
+            faiss_try(faiss_Index_train(self.inner_ptr(), n as i64, x.as_ptr()))?;
+            Ok(())
+        }
+    }
+    fn assign(
+        &mut self,
+        query: &[f32],
+        k: usize,
+    ) -> Result<crate::index::AssignSearchResult> {
+        unsafe {
+            let nq = query.len() / self.d() as usize;
+            let mut out_labels = vec![Idx::none(); k * nq];
+            faiss_try(faiss_Index_assign(
+                self.inner_ptr(),
+                nq as idx_t,
+                query.as_ptr(),
+                out_labels.as_mut_ptr() as *mut _,
+                k as i64,
+            ))?;
+            Ok(crate::index::AssignSearchResult { labels: out_labels })
+        }
+    }
+    fn search(&mut self, query: &[f32], k: usize) -> Result<crate::index::SearchResult> {
+        unsafe {
+            let nq = query.len() / self.d() as usize;
+            let mut distances = vec![0_f32; k * nq];
+            let mut labels = vec![Idx::none(); k * nq];
+            faiss_try(faiss_Index_search(
+                self.inner_ptr(),
+                nq as idx_t,
+                query.as_ptr(),
+                k as idx_t,
+                distances.as_mut_ptr(),
+                labels.as_mut_ptr() as *mut _,
+            ))?;
+            Ok(crate::index::SearchResult { distances, labels })
+        }
+    }
+    fn range_search(
+        &mut self,
+        query: &[f32],
+        radius: f32,
+    ) -> Result<crate::index::RangeSearchResult> {
+        unsafe {
+            let nq = (query.len() / self.d() as usize) as idx_t;
+            let mut p_res: *mut FaissRangeSearchResult = ::std::ptr::null_mut();
+            faiss_try(faiss_RangeSearchResult_new(&mut p_res, nq))?;
+            faiss_try(faiss_Index_range_search(
+                self.inner_ptr(),
+                nq,
+                query.as_ptr(),
+                radius,
+                p_res,
+            ))?;
+            Ok(crate::index::RangeSearchResult { inner: p_res })
+        }
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        unsafe {
+            faiss_try(faiss_Index_reset(self.inner_ptr()))?;
+            Ok(())
+        }
+    }
+
+    fn remove_ids(&mut self, sel: &IdSelector) -> Result<usize> {
+        unsafe {
+            let mut n_removed = 0;
+            faiss_try(faiss_Index_remove_ids(
+                self.inner_ptr(),
+                sel.inner_ptr(),
+                &mut n_removed,
+            ))?;
+            Ok(n_removed)
+        }
+    }
+
+    fn search_centroids<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<CentroidSearchResult> {
+        assert!(k == 1, "k must be 1, other values are unimplemented");
+        assert!(self.metric_type() == MetricType::InnerProduct, "Only inner product is supported at the moment");
+
+        let nq = query.as_ref().len() / self.d() as usize;
+        // For now, let it overextend. Technically this should be
+        // equal to M when the index is quantized
+        let mut bytes = vec![0 as u8; self.d() as usize * nq * size_of::<usize>() / size_of::<u8>()];
+        unsafe {
+            faiss_try(faiss_Index_sa_encode(
+                self.inner_ptr(), 
+                nq as i64, 
+                query.as_ref().as_ptr(), 
+                bytes.as_mut_ptr()))?;
+        }
+
+        let mut centroid_coords = vec![0 as f32; self.d() as usize * nq];
+
+        // once encoded, decode the codes in bytes to get back the k closest centroids
+        unsafe {
+            faiss_try(faiss_Index_sa_decode(
+                self.inner_ptr(),
+                nq as i64, 
+                bytes.as_ptr(), 
+                centroid_coords.as_mut_ptr()))?;
+        }
+
+        // calculate inner product
+        let mut distances = vec![0_f32; nq];
+        for i in 0..nq {
+            unsafe {
+                faiss_fvec_inner_products_ny(distances.as_mut_ptr().add(i), 
+                    query.as_ref().as_ptr().add(self.d() as usize * i),
+                    centroid_coords.as_ptr().add(self.d() as usize * i * k),
+                    self.d() as usize, 
+                    k);
+            }
+        }
+        Ok(index::CentroidSearchResult { distances })
+    }
+
+    fn verbose(&self) -> bool {
+        unsafe { faiss_Index_verbose(self.inner_ptr()) != 0 }
+    }
+
+    fn set_verbose(&mut self, value: bool) {
+        unsafe {
+            faiss_Index_set_verbose(self.inner_ptr(), std::os::raw::c_int::from(value));
+        }
+    }
+}
 
 impl TryClone for IndexImpl {
     fn try_clone(&self) -> Result<Self>
