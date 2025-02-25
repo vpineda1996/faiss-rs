@@ -217,7 +217,7 @@ impl<BI> Index for RefineFlatIndexImpl<BI> {
         }
     }
     
-    fn search_centroids<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<CentroidSearchResult> {
+    fn search_centroids<T: AsRef<[f32]>>(&mut self, _query: T, _k: usize) -> Result<CentroidSearchResult> {
         unimplemented!()
     }
 }
