@@ -186,7 +186,9 @@ pub trait Index {
     /// Set Index verbosity level
     fn set_verbose(&mut self, value: bool);
 
-    fn search_centroids<T: AsRef<[f32]>>(&mut self, q: T, k: usize) -> Result<CentroidSearchResult>;
+    fn search_frequencies<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<FreqSearchResult>;
+
+    fn search_neighbourhood<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<FreqSearchResult>;
 }
 
 impl<I> Index for Box<I>
@@ -249,8 +251,12 @@ where
         (**self).set_verbose(value)
     }
 
-    fn search_centroids<T: AsRef<[f32]>>(&mut self, q: T, k: usize) -> Result<CentroidSearchResult> {
-        (**self).search_centroids(q, k)
+    fn search_frequencies<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<FreqSearchResult> {
+        (**self).search_frequencies(query, k)
+    }
+
+    fn search_neighbourhood<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<FreqSearchResult>{
+        (**self).search_neighbourhood(query, k)
     }
 }
 
@@ -380,8 +386,10 @@ pub struct SearchResult {
 
 /// The outcome of an index centroid search operation.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CentroidSearchResult {
-    pub distances: Vec<f32>
+pub struct FreqSearchResult {
+    pub distances: Vec<f32>,
+    pub labels: Vec<Idx>,
+    pub frequencies: Vec<usize>
 }
 
 
@@ -671,45 +679,77 @@ impl crate::index::Index for IndexImpl {
         }
     }
 
-    fn search_centroids<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<CentroidSearchResult> {
-        assert!(k == 1, "k must be 1, other values are unimplemented");
-        assert!(self.metric_type() == MetricType::InnerProduct, "Only inner product is supported at the moment");
-
-        let nq = query.as_ref().len() / self.d() as usize;
-        // For now, let it overextend. Technically this should be
-        // equal to M when the index is quantized
-        let mut bytes = vec![0 as u8; self.d() as usize * nq * size_of::<usize>() / size_of::<u8>()];
+    fn search_frequencies<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<FreqSearchResult> {
         unsafe {
-            faiss_try(faiss_Index_sa_encode(
-                self.inner_ptr(), 
-                nq as i64, 
-                query.as_ref().as_ptr(), 
-                bytes.as_mut_ptr()))?;
-        }
-
-        let mut centroid_coords = vec![0 as f32; self.d() as usize * nq];
-
-        // once encoded, decode the codes in bytes to get back the k closest centroids
-        unsafe {
-            faiss_try(faiss_Index_sa_decode(
+            let nq = query.as_ref().len() / self.d() as usize;
+            let mut distances = vec![0_f32; k * nq];
+            let mut labels = vec![Idx::none(); k * nq];
+            let mut frequencies = vec![0_usize; k * nq];
+            faiss_try(faiss_Index_search_frequencies(
                 self.inner_ptr(),
-                nq as i64, 
-                bytes.as_ptr(), 
-                centroid_coords.as_mut_ptr()))?;
+                nq as idx_t,
+                query.as_ref().as_ptr(),
+                k as idx_t,
+                distances.as_mut_ptr(),
+                labels.as_mut_ptr() as *mut _,
+                frequencies.as_mut_ptr(),
+            ))?;
+            Ok(crate::index::FreqSearchResult { distances, labels, frequencies })
         }
 
-        // calculate inner product
-        let mut distances = vec![0_f32; nq];
-        for i in 0..nq {
-            unsafe {
-                faiss_fvec_inner_products_ny(distances.as_mut_ptr().add(i), 
-                    query.as_ref().as_ptr().add(self.d() as usize * i),
-                    centroid_coords.as_ptr().add(self.d() as usize * i * k),
-                    self.d() as usize, 
-                    k);
-            }
+        // let nq = query.as_ref().len() / self.d() as usize;
+        // // For now, let it overextend. Technically this should be
+        // // equal to M when the index is quantized
+        // let mut bytes = vec![0 as u8; self.d() as usize * nq * size_of::<usize>() / size_of::<u8>()];
+        // unsafe {
+        //     faiss_try(faiss_Index_sa_encode(
+        //         self.inner_ptr(), 
+        //         nq as i64, 
+        //         query.as_ref().as_ptr(), 
+        //         bytes.as_mut_ptr()))?;
+        // }
+
+        // let mut centroid_coords = vec![0 as f32; self.d() as usize * nq];
+
+        // // once encoded, decode the codes in bytes to get back the k closest centroids
+        // unsafe {
+        //     faiss_try(faiss_Index_sa_decode(
+        //         self.inner_ptr(),
+        //         nq as i64, 
+        //         bytes.as_ptr(), 
+        //         centroid_coords.as_mut_ptr()))?;
+        // }
+
+        // // calculate inner product
+        // let mut distances = vec![0_f32; nq];
+        // for i in 0..nq {
+        //     unsafe {
+        //         faiss_fvec_inner_products_ny(distances.as_mut_ptr().add(i), 
+        //             query.as_ref().as_ptr().add(self.d() as usize * i),
+        //             centroid_coords.as_ptr().add(self.d() as usize * i * k),
+        //             self.d() as usize, 
+        //             k);
+        //     }
+        // }
+    }
+
+    fn search_neighbourhood<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<FreqSearchResult> {
+        unsafe {
+            let nq = query.as_ref().len() / self.d() as usize;
+            let mut distances = vec![0_f32; k * nq];
+            let mut labels = vec![Idx::none(); k * nq];
+            let mut frequencies = vec![0_usize; k * nq];
+            faiss_try(faiss_Index_pq_search_neighbourhood(
+                self.inner_ptr(),
+                nq as idx_t,
+                query.as_ref().as_ptr(),
+                k as idx_t,
+                distances.as_mut_ptr(),
+                labels.as_mut_ptr() as *mut _,
+                frequencies.as_mut_ptr(),
+            ))?;
+            Ok(crate::index::FreqSearchResult { distances, labels, frequencies })
         }
-        Ok(index::CentroidSearchResult { distances })
     }
 
     fn verbose(&self) -> bool {

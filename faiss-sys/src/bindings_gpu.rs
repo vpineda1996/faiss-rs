@@ -120,6 +120,29 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
+    pub fn faiss_Index_search_frequencies(
+        index: *const FaissIndex,
+        n: idx_t,
+        x: *const f32,
+        k: idx_t,
+        distances: *mut f32,
+        labels: *mut idx_t,
+        frequencies: *mut usize,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    #[doc = " query n vectors of dimension d to the index\n\n this function defers from search in that the\n knn computation takes into account the radius\n of the centroids."]
+    pub fn faiss_Index_pq_search_neighbourhood(
+        index: *mut FaissIndex,
+        n: idx_t,
+        x: *const f32,
+        k: idx_t,
+        distances: *mut f32,
+        labels: *mut idx_t,
+        frequencies: *mut usize,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
     #[doc = " query n vectors of dimension d with search parameters to the index.\n\n return at most k vectors. If there are not enough results for a query,\n the result is padded with -1s.\n\n @param index       opaque pointer to index object\n @param x           input vectors to search, size n * d\n @param params      input params to modify how search is done\n @param labels      output labels of the NNs, size n*k\n @param distances   output pairwise distances, size n*k"]
     pub fn faiss_Index_search_with_params(
         index: *const FaissIndex,

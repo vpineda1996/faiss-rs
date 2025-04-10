@@ -393,7 +393,11 @@ impl<Q> Index for IVFScalarQuantizerIndexImpl<Q> {
         }
     }
 
-    fn search_centroids<T: AsRef<[f32]>>(&mut self, _query: T, _k: usize) -> Result<CentroidSearchResult> {
+    fn search_frequencies<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<FreqSearchResult> {
+        unimplemented!()
+    }
+
+    fn search_neighbourhood<T: AsRef<[f32]>>(&mut self, query: T, k: usize) -> Result<FreqSearchResult> {
         unimplemented!()
     }
 }

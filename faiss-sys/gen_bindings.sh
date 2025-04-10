@@ -10,7 +10,7 @@ fi
 
 repo_url=https://github.com/facebookresearch/faiss
 repo_rev=v1.10.0
-cuda_root=/opt/cuda
+cuda_root=/usr/local/cuda
 
 if [ ! -d faiss ]; then
     git clone "$repo_url" faiss --branch "$repo_rev" --depth 1
